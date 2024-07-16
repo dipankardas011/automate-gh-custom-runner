@@ -122,7 +122,7 @@
   when: missing_credentials_runners | length > 0
   loop: "{{ missing_credentials_runners }}"
   ansible.builtin.shell: |
-    sudo su - "{{ item }}" -c "cd ~/actions-runner && ./config.sh --url https://github.com/{{ OrganizationName }} --token {{ gh_reg_token }} --unattended --name {{ item }} --labels {{ RunnerLabel }}"
+    sudo su - "{{ item }}" -c "cd ~/actions-runner && ./config.sh --url https://github.com/{{ OrganizationName }} --token {{ gh_reg_token }} --unattended --name {{ item }} --labels {{ RunnerLabel }},{{ item }}"
 
 - name: start the service
   tags: ["all"]
