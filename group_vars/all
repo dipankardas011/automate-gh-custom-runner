@@ -1,0 +1,6 @@
+OrganizationName: <ORGANIZATION>
+RunnerLabel: "<COMMA-SEPERATED-LABELS>"
+RunnerName:
+- <RUNNER_NAME>
+- <RUNNER_NAME>
+- <RUNNER_NAME>

@@ -1,0 +1,138 @@
+---
+- name: display the variables
+  tags: ["all"]
+  ansible.builtin.debug:
+    msg: "User: {{ RunnerName }}, Org: {{ OrganizationName }}, Labels: {{ RunnerLabel }}"
+
+- name: create user
+  tags: ["all"]
+  ansible.builtin.user:
+    name: "{{ item }}"
+    create_home: true
+    shell: "/bin/bash"
+    state: present
+  loop: "{{RunnerName}}"
+
+- name: add runner user to the docker group
+  loop: "{{RunnerName}}"
+  tags: ["all"]
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+
+- name: give runner sudo nopasswd previliges
+  loop: "{{RunnerName}}"
+  tags: ["all"]
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ item }}"
+    content: "{{ item }} ALL=(ALL) NOPASSWD: ALL"
+    owner: root
+    group: root
+    mode: "0440"
+
+- name: Fetch Latest Version of the action/runner repo
+  tags: ["all"]
+  ansible.builtin.uri:
+    url: https://api.github.com/repos/actions/runner/releases/latest
+    follow_redirects: all
+    method: GET
+    return_content: true
+    body_format: "json"
+  register: _result_repo_release_version
+  until: _result_repo_release_version.status == 200
+
+- name: set variable to store the latest version of the action/runner repo
+  tags: ["all"]
+  ansible.builtin.set_fact:
+    repo_version: "{{ (_result_repo_release_version.content | from_json).tag_name }}"
+
+- name: Creates a directory for actions runner
+  tags: ["all"]
+  loop: "{{RunnerName}}"
+  ansible.builtin.file:
+    path: "/home/{{ item }}/actions-runner"
+    state: directory
+    recurse: true
+    mode: "0755"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+
+- name: download latest files
+  tags: ["all"]
+  loop: "{{RunnerName}}"
+  ansible.builtin.get_url:
+    url: "https://github.com/actions/runner/releases/download/{{ repo_version }}/actions-runner-linux-x64-{{ repo_version[1:] }}.tar.gz"
+    dest: "/home/{{ item }}/actions-runner/actions-runner-linux-x64-{{ repo_version[1:] }}.tar.gz"
+    owner: "{{ item }}"
+    group: "{{ item }}"
+
+- name: Extract and move binary of github/action-runner
+  tags: ["all"]
+  loop: "{{RunnerName}}"
+  ansible.builtin.unarchive:
+    src: "/home/{{ item }}/actions-runner/actions-runner-linux-x64-{{ repo_version[1:] }}.tar.gz"
+    dest: "/home/{{ item }}/actions-runner"
+    remote_src: yes
+    owner: "{{ item }}"
+    group: "{{ item }}"
+
+- name: Check .credentials are already present or not
+  tags: ["all"]
+  loop: "{{RunnerName}}"
+  ansible.builtin.stat: path="/home/{{ item }}/actions-runner/.credentials"
+  register: credentials_exist
+
+- name: Set fact to determine if any credentials are missing
+  tags: ["all"]
+  set_fact:
+    missing_credentials_runners: "{{ credentials_exist.results | selectattr('stat.exists', 'equalto', false) | map(attribute='item') | list }}"
+
+- name: generate registration_token curl
+  tags: ["all"]
+  when: (missing_credentials_runners | length > 0) and not('use_reg_token' in ansible_run_tags)
+  ansible.builtin.uri:
+    url: "https://api.github.com/orgs/{{ OrganizationName }}/actions/runners/registration-token"
+    follow_redirects: all
+    method: POST
+    body_format: "json"
+    status_code: [201]
+    return_content: true
+    headers:
+      Accept: "application/vnd.github+json"
+      Authorization: "Bearer {{ lookup('ansible.builtin.env', 'GH_TOKEN') }}"
+      X-GitHub-Api-Version: "2022-11-28"
+  register: _result_registration_token
+  until: _result_registration_token.status == 201
+
+- name: set variable registration_token generated using GH_PAT
+  tags: ["all"]
+  when: (missing_credentials_runners | length > 0) and not('use_reg_token' in ansible_run_tags)
+  ansible.builtin.set_fact:
+    gh_reg_token: "{{ (_result_registration_token.content | from_json).token }}"
+
+- name: set variable registration_token using user input
+  tags: ["all"]
+  when: (missing_credentials_runners | length > 0) and ('use_reg_token' in ansible_run_tags)
+  ansible.builtin.set_fact:
+    gh_reg_token: "{{ lookup('ansible.builtin.env', 'ORG_REGISTRATION_TOKEN') }}"
+
+- name: command to add the runner to github
+  tags: ["all"]
+  when: missing_credentials_runners | length > 0
+  loop: "{{ missing_credentials_runners }}"
+  ansible.builtin.shell: |
+    sudo su - "{{ item }}" -c "cd ~/actions-runner && ./config.sh --url https://github.com/{{ OrganizationName }} --token {{ gh_reg_token }} --unattended --name {{ item }} --labels {{ RunnerLabel }}"
+
+- name: start the service
+  tags: ["all"]
+  when: missing_credentials_runners | length > 0
+  loop: "{{ missing_credentials_runners }}"
+  ansible.builtin.shell: |
+    sudo su - "{{ item }}" -c "cd ~/actions-runner && sudo ./svc.sh install && sudo ./svc.sh start"
+
+- name: status of the service
+  tags: ["all"]
+  loop: "{{RunnerName}}"
+  ansible.builtin.shell: |
+    sudo su - "{{ item }}" -c "cd ~/actions-runner && sudo ./svc.sh status"

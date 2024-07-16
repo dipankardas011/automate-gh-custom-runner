@@ -1,0 +1,25 @@
+---
+# Purpose: to create and bootstrap github custom runner
+- name: Runner Playbook to add VM to Github custom runner
+  hosts: all
+  become: true
+  gather_facts: true
+  ignore_unreachable: true
+  tasks:
+    - name: validate runnerNames
+      loop: "{{ RunnerName }}"
+      tags: ["all"]
+      ansible.builtin.assert:
+        that: "'{{ item }}' | regex_search('^[\\w-]+$')"
+        success_msg: "Variable is valid"
+        fail_msg: "Variable is not valid"
+
+    - name: Ping my hosts
+      tags: ["all"]
+      ansible.builtin.ping:
+    - include_tasks: setup-tools.yml
+      tags: ["all"]
+      name: configure runner to have required tools
+    - include_tasks: gh-runner.yml
+      tags: ["all"]
+      name: configure runner to join github db as custom runner
